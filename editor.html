@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Linkworld editor</title>
+<style>
+  html, body { margin: 0; height: 100%; font: 13px sans-serif; background: #222; color: #ddd; }
+  body { display: flex; flex-direction: column; }
+  #bar { padding: 4px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; border-bottom: 1px solid #444; }
+  .sep { width: 1px; height: 20px; background: #555; margin: 0 4px; }
+  button.on { background: #fd3; }
+  #size.warn { color: #f66; font-weight: bold; }
+  #msg { margin-left: 8px; }
+  [hidden] { display: none !important; }
+
+  /* Level screen: 2D views | splitter | 3D view | panel */
+  #main { flex: 1; display: flex; min-height: 0; }
+  #views2d { width: 45%; flex: none; display: flex; flex-direction: column; min-width: 150px; }
+  .pane { flex: 1; position: relative; min-height: 0; }
+  .pane + .pane { border-top: 1px solid #444; }
+  .pane canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; }
+  .corner { position: absolute; top: 4px; right: 4px; }
+  .split { width: 6px; cursor: col-resize; background: #333; flex: none; }
+  .split:hover { background: #555; }
+  #viewWrap { flex: 1; min-width: 150px; position: relative; }
+  #view { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; }
+  #viewMode { position: absolute; top: 4px; left: 6px; color: #fd3; text-shadow: 0 0 2px #000; pointer-events: none; }
+  #panel { width: 280px; flex: none; overflow-y: auto; padding: 6px; box-sizing: border-box; }
+  fieldset { border: 1px solid #444; margin: 0 0 6px; }
+  label { display: block; margin: 3px 0; }
+  input[type=number] { width: 58px; }
+  .row input { width: 52px; }
+  .help { color: #999; line-height: 1.4; }
+  #texPicker { display: flex; flex-wrap: wrap; gap: 3px; margin: 4px 0; }
+  .role { border-top: 1px solid #444; margin-top: 6px; padding-top: 4px; }
+
+  /* Texture screen: slots | preview | ops */
+  #texScreen { flex: 1; display: flex; min-height: 0; }
+  #texLeft { width: 220px; padding: 6px; overflow-y: auto; border-right: 1px solid #444; }
+  #texEdit { flex: 1; display: flex; min-width: 0; }
+  #texCenter { padding: 6px; }
+  #texRight { flex: 1; padding: 6px; overflow-y: auto; border-left: 1px solid #444; min-width: 260px; }
+  #texSlots { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 6px; }
+  .slotwrap { display: inline-flex; flex-direction: column; align-items: center; }
+  .slot { border: 2px solid transparent; cursor: pointer; image-rendering: pixelated; }
+  .slot.on { border-color: #fd3; }
+  #texPreview { width: 512px; height: 512px; max-width: 100%; display: block; margin: 6px 0; image-rendering: pixelated; cursor: crosshair; }
+  #opErr { color: #f66; }
+  #partScreen { flex: 1; display: flex; min-height: 0; }
+  #partLeft { width: 220px; padding: 6px; overflow-y: auto; border-right: 1px solid #444; }
+  #partSlots { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 6px; }
+  #partEdit { flex: 1; display: flex; flex-wrap: wrap; gap: 12px; padding: 6px; overflow-y: auto; }
+  #partFields { width: 300px; }
+  #partPreview { width: 360px; height: 360px; max-width: 100%; border: 1px solid #444; }
+  #opList { padding-left: 18px; }
+
+  /* Models screen: panel | 2x2 views (top, 3D / front, side) */
+  #mdlScreen { flex: 1; display: flex; min-height: 0; }
+  #mdlLeft { width: 270px; flex: none; padding: 6px; overflow-y: auto; border-right: 1px solid #444; box-sizing: border-box; }
+  #mdlSlots, #mdlParts { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 6px; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border: 1px solid #000; vertical-align: middle; }
+  #mdlViews { flex: 1; display: grid; grid-template: 1fr 1fr / 1fr 1fr; gap: 1px; background: #444; min-width: 0; }
+  .mpane { position: relative; min-height: 0; min-width: 0; background: #1b1b1b; }
+  .mpane canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; }
+  .mpane .corner { position: absolute; top: 4px; right: 4px; }
+
+  /* Wiki screen: topics | article */
+  #wikiScreen { flex: 1; display: flex; min-height: 0; }
+  #wikiNav { width: 180px; flex: none; padding: 6px; border-right: 1px solid #444; display: flex; flex-direction: column; gap: 3px; overflow-y: auto; }
+  #wikiNav button { text-align: left; }
+  #wiki { flex: 1; overflow-y: auto; padding: 4px 18px 24px; line-height: 1.5; }
+  #wiki section { max-width: 760px; }
+  #wiki h2 { margin: 10px 0 6px; font-size: 18px; }
+  #wiki h3 { margin: 14px 0 4px; font-size: 14px; color: #fd3; }
+  #wiki kbd { background: #333; border: 1px solid #555; border-radius: 3px; padding: 0 4px; font: 12px monospace; }
+  #wiki td, #wiki th { padding: 2px 10px 2px 0; text-align: left; vertical-align: top; }
+  .mpane .tag { position: absolute; top: 4px; left: 6px; color: #aaa; pointer-events: none; }
+  #opList li { margin-bottom: 6px; border-bottom: 1px solid #333; padding-bottom: 4px; max-width: 420px; }
+  .ophead button { padding: 0 4px; margin-left: 2px; }
+  .param { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+  .param input[type=range] { flex: 1; min-width: 90px; }
+  .val { width: 26px; text-align: right; }
+  .hint { color: #888; font-size: 11px; width: 100%; }
+  .pixels { cursor: crosshair; }
+
+  /* Options dialog */
+  #options { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; }
+  #options > div { background: #2a2a2a; border: 1px solid #555; padding: 12px; width: 320px; max-height: 90%; overflow-y: auto; }
+
+  @media (max-width: 800px) { #main, #texScreen, #mdlScreen { flex-direction: column; } #mdlLeft { width: auto; max-height: 40%; } #views2d { width: auto !important; height: 50%; } .split { display: none; } #panel { width: auto; } }
+</style>
+</head>
+<body>
+<div id="bar">
+  <a href="./" style="color:#ddd">Menu</a>
+  <button id="new">New</button>
+  <button id="open">Open link…</button>
+  <span class="sep"></span>
+  <select id="levelSel" title="Levels in this link"></select>
+  <button id="addLevel" title="Add a level to this link">+ Level</button>
+  <button id="delLevel">Delete level</button>
+  <span class="sep"></span>
+  <button id="undo">Undo</button>
+  <button id="redo">Redo</button>
+  <span class="sep"></span>
+  <button id="tabLevel">Level</button>
+  <button id="tabTextures">Textures</button>
+  <button id="tabParticles">Particles</button>
+  <button id="tabModels">Models</button>
+  <button id="tabWiki">Wiki</button>
+  <span id="levelTools">
+    <span class="sep"></span>
+    <button data-tool="select">Select (V)</button>
+    <button data-tool="box">Box (B)</button>
+    <button data-tool="vertex">Vertex (E)</button>
+    <button data-tool="start">Start (P)</button>
+    <button data-tool="light">Light (L)</button>
+    <button data-tool="message">Message (M)</button>
+    <button data-tool="emitter">Emitter (F)</button>
+    <button data-tool="prop">Prop (O)</button>
+    <span class="sep"></span>
+    Layer y <input id="layerY" type="number" step="8">
+    height <input id="layerH" type="number" min="1">
+    <button id="layerDown">Down</button><button id="layerUp">Up</button>
+    Snap <select id="snap"><option>1</option><option>2</option><option>4</option><option selected>8</option><option>16</option><option>32</option></select>
+  </span>
+  <span class="sep"></span>
+  <button id="openOptions">Options</button>
+  <button id="play">Play test</button>
+  <button id="copy">Copy link</button>
+  <span id="size"></span>
+  <span id="msg"></span>
+</div>
+
+<div id="main">
+  <div id="views2d">
+    <div class="pane"><canvas id="gridTop"></canvas></div>
+    <div class="pane">
+      <canvas id="gridSide"></canvas>
+      <select id="sideAxis" class="corner"><option value="0">Front (x / y)</option><option value="2">Side (z / y)</option></select>
+    </div>
+  </div>
+  <div id="split" class="split" title="Drag to resize"></div>
+  <div id="viewWrap">
+    <canvas id="view"></canvas>
+    <div id="viewMode"></div>
+  </div>
+  <div id="split2" class="split" title="Drag to resize"></div>
+  <div id="panel">
+    <div id="nothing">
+      <p>Nothing selected.</p>
+    </div>
+    <fieldset id="boxProps" hidden>
+      <legend>Box</legend>
+      <div class="row">min <input id="minX" type="number"><input id="minY" type="number"><input id="minZ" type="number"></div>
+      <div class="row">max <input id="maxX" type="number"><input id="maxY" type="number"><input id="maxZ" type="number"></div>
+      <label><input id="solid" type="checkbox"> Solid</label>
+      <div id="shapeRow">Shaped box (corners moved) <button id="resetShape">Reset to box</button></div>
+      <label>Face <select id="face">
+        <option value="-1">All faces</option><option value="0">−x (west)</option><option value="1">+x (east)</option>
+        <option value="2">−y (bottom)</option><option value="3">+y (top)</option><option value="4">−z (north)</option><option value="5">+z (south)</option>
+      </select></label>
+      Texture
+      <div id="texPicker"></div>
+      <button id="editTextures">Edit textures…</button>
+      <label>Scale (units per repeat) <input id="scale" type="number" min="0" max="255"></label>
+      <div class="row">Offset <input id="ox" type="number" min="0" max="255"><input id="oy" type="number" min="0" max="255"></div>
+      <button id="dup">Duplicate (Ctrl+D)</button>
+      <button id="del">Delete (Del)</button>
+      <div id="roleButtons" style="margin-top:6px"></div>
+      <div id="roles"></div>
+    </fieldset>
+    <fieldset id="entProps" hidden>
+      <legend id="entLegend">Entity</legend>
+      <div id="entFields"></div>
+      <button id="delEnt">Delete (Del)</button>
+    </fieldset>
+  </div>
+</div>
+
+<div id="texScreen" hidden>
+  <div id="texLeft">
+    <label>List <select id="texOwner"><option value="">This level</option><option value="1">Shared (models)</option></select></label>
+    <div id="texSlots"></div>
+    <button id="addTex">New</button>
+    <select id="preset"><option value="">Add preset…</option></select>
+    <button id="delTex">Delete</button>
+  </div>
+  <div id="texEdit" hidden>
+    <div id="texCenter">
+      <div>
+        Size <select id="texSize"><option>64</option><option>128</option></select>
+        <label style="display:inline" title="Opacity comes from the top layer's mask; no normal map"><input id="texAlpha" type="checkbox"> Transparent</label>
+        <label style="display:inline"><input id="texTiled" type="checkbox"> Tiled 2×2</label>
+      </div>
+      <canvas id="texPreview" width="512" height="512"></canvas>
+      <div id="drawTools">Draw: </div>
+      <button id="polyDone" hidden>Finish polygon</button>
+    </div>
+    <div id="texRight">
+      <div><select id="addOp"><option value="">Add op…</option></select> <small id="opCount"></small></div>
+      <div id="opErr"></div>
+      <ol id="opList"></ol>
+    </div>
+  </div>
+</div>
+
+<div id="partScreen" hidden>
+  <div id="partLeft">
+    <label>List <select id="partOwner"><option value="">This level</option><option value="1">Shared (models)</option></select></label>
+    <div id="partSlots"></div>
+    <button id="addPart">New</button>
+    <button id="delPart">Delete</button>
+  </div>
+  <div id="partEdit" hidden>
+    <div id="partFields"></div>
+    <div><canvas id="partPreview" width="360" height="360"></canvas><div class="help">Preview: emitter pointing up, side view.</div></div>
+  </div>
+</div>
+
+<div id="mdlScreen" hidden>
+  <div id="mdlLeft">
+    <div id="mdlSlots"></div>
+    <button id="addMdl">New model</button>
+    <button id="delMdl">Delete</button>
+    <div id="mdlEdit" hidden>
+      <label>Name <input id="mdlName" maxlength="32"></label>
+      <label title="World units per 32 model units: 8 makes 4 model units one world unit">Scale <input id="mdlScale" type="number" min="1" max="255"></label>
+      <fieldset>
+        <legend>Parts</legend>
+        <div id="mdlParts"></div>
+        <div>Add base <button data-prim="box" data-base="1">Box</button><button data-prim="cylinder" data-base="1">Cylinder</button><button data-prim="sphere" data-base="1">Sphere</button></div>
+        <div>Add detail <button data-prim="box">Box</button><button data-prim="cylinder">Cylinder</button><button data-prim="sphere">Sphere</button></div>
+        <div id="partProps" class="role">
+          <label><input id="partMirror" type="checkbox"> Base part (mirrored across x = 0)</label>
+          <label>Look <select id="partTex"></select> <input id="partColor" type="color"></label>
+          <label id="partScaleRow">Texture scale (model units per repeat) <input id="partScale" type="number" min="0" max="255"></label>
+          <button id="editShared">Shared textures…</button>
+          <div style="margin-top:4px"><button id="dupPart">Duplicate part</button> <button id="delPartM">Delete part</button></div>
+        </div>
+      </fieldset>
+      <fieldset id="vertTools">
+        <legend>Vertices of the part</legend>
+        <button id="mkFace">Make face (F)</button> <button id="flipFace">Flip faces</button>
+        <button id="extrude">Extrude (E)</button> <button id="merge">Merge (M)</button>
+        <button id="delFace">Delete faces</button> <button id="delVert">Delete vertices (Del)</button>
+        <button id="resetUV">Reset UVs</button>
+        <label>Snap <select id="mdlSnap"><option>1</option><option>2</option><option selected>4</option><option>8</option><option>16</option></select></label>
+        <div id="vertInfo" class="help"></div>
+      </fieldset>
+      <fieldset>
+        <legend>Particle emitter</legend>
+        <label><input id="mdlEmit" type="checkbox"> Emitter (always on)</label>
+        <div id="emitProps">
+          <label>Type <select id="emitKind"></select> <button id="editSharedParts">Shared types…</button></label>
+          <div class="row">pos <input id="emitX" type="number"><input id="emitY" type="number"><input id="emitZ" type="number"></div>
+          <label>Yaw (0–255) <input id="emitAngle" type="number" min="0" max="255"></label>
+          <label>Pitch (0 level, 64 up) <input id="emitPitch" type="number" min="0" max="255"></label>
+        </div>
+      </fieldset>
+    </div>
+  </div>
+  <div id="mdlViews">
+    <div class="mpane"><canvas id="mdlTop"></canvas></div>
+    <div class="mpane"><canvas id="mdl3d"></canvas><span class="tag">3D preview</span></div>
+    <div class="mpane"><canvas id="mdlFront"></canvas></div>
+    <div class="mpane">
+      <canvas id="mdlSide"></canvas><canvas id="mdlUV" hidden></canvas>
+      <select id="sidePane" class="corner"><option value="side">Side (z / y)</option><option value="uv">UV</option></select>
+    </div>
+  </div>
+</div>
+
+<div id="wikiScreen" hidden>
+  <div id="wikiNav">
+    <button data-topic="start">Getting started</button>
+    <button data-topic="views">Views and moving around</button>
+    <button data-topic="boxes">Boxes and faces</button>
+    <button data-topic="shapes">Shaped boxes (Vertex tool)</button>
+    <button data-topic="roles">Doors, triggers, buttons, exits</button>
+    <button data-topic="entities">Lights, messages, emitters, props</button>
+    <button data-topic="textures">Textures</button>
+    <button data-topic="particles">Particles</button>
+    <button data-topic="models">Models</button>
+    <button data-topic="modeling">Modeling tools</button>
+    <button data-topic="uv">UV editing</button>
+    <button data-topic="keys">Keyboard shortcuts</button>
+  </div>
+  <div id="wiki">
+    <section data-topic="start">
+      <h2>Getting started</h2>
+      <p>Everything you make lives in the link: the levels, their boxes, textures and entities, and the models. There is
+        no server. <b>Copy link</b> gives you a link that plays it, <b>Play test</b> opens it in a new tab, and <b>Open link…</b>
+        loads any Linkworld link back into the editor (Undo brings your previous draft back). Your draft is saved in this
+        browser as you work.</p>
+      <p>The counter in the toolbar shows how long the link is. It turns red past the size set in <b>Options</b> (some
+        chat apps cut long links). If it says <i>Invalid level</i>, the reason follows: fix that before sharing.</p>
+      <h3>Levels</h3>
+      <p>One link can hold up to 64 levels. <b>+ Level</b> adds one, the list switches between them. Exits move the player
+        from one level to another. Name, ambient light, sky / fog color and fog distance of a level are in <b>Options</b>.</p>
+      <h3>Screens</h3>
+      <p><b>Level</b> builds the level, <b>Textures</b> and <b>Particles</b> make what it looks like, <b>Models</b> makes
+        objects to place in it, and <b>Wiki</b> is this page.</p>
+      <h3>Units</h3>
+      <p>1 unit is 1/8 of a block (a block is about a meter). The player is 14 units tall and 5 wide; they climb steps of
+        up to 3 units. Y is up, and an angle of 0 faces −z (north, up in the top view).</p>
+    </section>
+    <section data-topic="views" hidden>
+      <h2>Views and moving around</h2>
+      <h3>2D views</h3>
+      <p>The top view looks down (x right, z down), the side view looks from the front or side (pick one in its corner).
+        Drag empty space or right-drag to pan, use the wheel to zoom. The top view only shows and picks what is in the current
+        <b>layer</b> (Layer y and height in the toolbar, <b>Down</b> / <b>Up</b> move it); the side view shows the layer as
+        dashed lines. <b>Snap</b> sets the grid everything snaps to.</p>
+      <h3>3D view</h3>
+      <p>Hold the right mouse button to look around and fly with <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd>,
+        <kbd>Q</kbd> / <kbd>E</kbd> down / up, <kbd>Shift</kbd> to go faster. Left click selects a box. The lighting is
+        the real baked lighting of the game.</p>
+      <p>The dividers between the views can be dragged.</p>
+    </section>
+    <section data-topic="boxes" hidden>
+      <h2>Boxes and faces</h2>
+      <p>Levels are made of boxes. With the <b>Box</b> tool (<kbd>B</kbd>) drag a rectangle in a 2D view: in the top view it
+        fills the current layer, in the side view it takes the depth of the selected box (or one block). With <b>Select</b>
+        (<kbd>V</kbd>) drag a box to move it, drag its edges to resize it, or type exact numbers in the panel.</p>
+      <p><b>Solid</b> boxes block the player; others are only seen (grass, bars, decoration).</p>
+      <h3>Textures on faces</h3>
+      <p>Pick a texture in the panel to put it on all six faces. To texture one face, choose it in <b>Face</b>, or press
+        <kbd>Tab</kbd> for face mode and click the face in the 3D view. <b>Scale</b> is how many units one repeat of the
+        texture covers; <b>Offset</b> shifts it. Textures follow the world, so neighbouring boxes line up.</p>
+      <p><kbd>Ctrl</kbd>+<kbd>D</kbd> duplicates the box, <kbd>Del</kbd> deletes it (and what uses it).</p>
+    </section>
+    <section data-topic="shapes" hidden>
+      <h2>Shaped boxes (Vertex tool)</h2>
+      <p>The <b>Vertex</b> tool (<kbd>E</kbd>) turns boxes into ramps, wedges and slopes: select a box and drag its corner
+        handles. In the top view a handle moves the corners stacked under it; in the side view you can move one.
+        In 3D, click a corner, then drag one of its arrows (x red, y green, z blue) to move it along that axis.</p>
+      <p>Corners only move inwards, and the shape is always the convex hull of the corners. A shape that would be flat is
+        refused. <b>Reset to box</b> undoes the shape. The player walks up shaped boxes like any floor.</p>
+    </section>
+    <section data-topic="roles" hidden>
+      <h2>Doors, triggers, buttons, exits</h2>
+      <p>These use a box: select it and press <b>Make door</b>, <b>trigger</b> or
+        <b>exit</b>. A box can have several roles.</p>
+      <h3>Doors</h3>
+      <p>A door slides a distance in a direction, or (Moves: Rotate) turns about one of its edges. It carries a player
+        standing on it, so a door moving up is a lift, and pushes the player out of its way. A door nothing activates opens
+        when the player comes near and closes 2 seconds after they leave.</p>
+      <h3>Triggers</h3>
+      <p>A <b>trigger</b>'s <b>Fires</b> setting picks what sets it off. <b>When entered</b>: the player walks into it;
+        its box is invisible in the game. <b>When used (E)</b>: the player looks at it up close and presses <kbd>E</kbd>,
+        seeing its prompt meanwhile. <b>When shot</b>: the player shoots it. Use and shoot triggers keep their box
+        visible and solid, so any part of the level can be a button or a target. A trigger fires every time, or with
+        <b>Only the first time</b> ticked just once (a spent button shows no prompt). Each one lists what it activates:
+        tick doors, messages and emitters in its panel.</p>
+      <p>Anything nothing activates runs on its own: doors open when the player is near, messages show and emitters start
+        at level start.</p>
+      <h3>Exits</h3>
+      <p>An exit box (invisible in the game) takes the player to another level of this link, to another Linkworld link, or
+        back to the menu.</p>
+    </section>
+    <section data-topic="entities" hidden>
+      <h2>Lights, messages, emitters, props</h2>
+      <p>Place these with their tools by clicking in a 2D view; drag them with Select to move them.</p>
+      <ul>
+        <li><b>Start</b> (<kbd>P</kbd>): where the player begins. Drag in the top view to set the direction they face.</li>
+        <li><b>Light</b> (<kbd>L</kbd>): color and radius. Light is baked when the level loads, with shadows from boxes.
+          Normal-mapped textures still respond to it.</li>
+        <li><b>Message</b> (<kbd>M</kbd>): text shown on screen when activated (or at level start).</li>
+        <li><b>Emitter</b> (<kbd>F</kbd>): sends particles of a particle type. Its yaw and pitch set where it fires (the
+          arrow). A continuous type starts and keeps going; a burst type emits once each time it is activated.</li>
+        <li><b>Prop</b> (<kbd>O</kbd>): places a model from the Models screen. Its angle turns it. Props are lit like the
+          level but are never solid; put a box around one if it should block the player. A model's emitter is always on.</li>
+      </ul>
+    </section>
+    <section data-topic="textures" hidden>
+      <h2>Textures</h2>
+      <p>Textures are recipes, not images: a list of ops run on a stack of layers. Generators (Noise, Cells, Bricks…) and
+        shapes push a layer, filters change the top one, and combiners (Add, Over, Blend…) merge the top layers. The result
+        is the top layer's color. Start from a <b>preset</b> to see how they are built.</p>
+      <h3>Drawing</h3>
+      <p>Pick a Draw tool and drag on the preview to add a shape, composited with Over. Polygon: click the points, then
+        double-click (or Finish polygon). Text: click to place it, drag it to move it, <kbd>Shift</kbd>+drag to rotate it.</p>
+      <h3>Shade and normal maps</h3>
+      <p><b>Shade</b> lights the height of the top layer and must be the last op. It also turns on normal mapping in the
+        game, so lights catch the bumps.</p>
+      <h3>Transparent textures</h3>
+      <p>A <b>Transparent</b> texture uses the top layer's mask as opacity (glass, grates, leaves, soft particles). It has no
+        normal map.</p>
+      <h3>Level and shared textures</h3>
+      <p>The <b>List</b> switch picks which textures you edit: <b>This level</b> (for boxes and the level's particle types)
+        or <b>Shared</b>, the link's own textures used by models and shared particle types. A level can have up to 64
+        textures and 256 ops in all; so can the shared list.</p>
+    </section>
+    <section data-topic="particles" hidden>
+      <h2>Particles</h2>
+      <p>A particle type is like a texture: make it here, then give it to emitters (or to a model's emitter). Rate is
+        particles per second (for burst types, per activation), life is in tenths of a second, spread 0 fires straight and
+        255 in all directions, and negative gravity makes them rise (smoke, flames). <b>Additive</b> makes them glow; give
+        them a <b>Transparent</b> texture for soft or round particles.</p>
+      <p>Like textures, the <b>List</b> switch picks the level's types or the shared ones. Shared types are for model
+        emitters, which are always on: <b>Burst</b> is ignored there. At most 2048 particles exist at once.</p>
+    </section>
+    <section data-topic="models" hidden>
+      <h2>Models</h2>
+      <p>Models are objects made of meshes: torches, crates, enemies, guns, projectiles. They belong to the whole link, so
+        every level can use them, and you place them with the Prop tool. A model faces −z (north) and stands on y = 0.</p>
+      <h3>Base and detail</h3>
+      <p>A model is built in two stages. <b>Base</b> parts are mirrored across x = 0: build only the +x half and the other
+        half comes free (half the bytes). <b>Detail</b> parts are drawn once, for the little one-sided touches. A part's
+        checkbox switches it between the two; in the views mirrored copies are dashed.</p>
+      <h3>Parts</h3>
+      <p>Add a part as a box, cylinder or sphere, then shape it with the modeling tools. Each part is a <b>solid color</b>
+        or a <b>shared texture</b> (Shared textures… opens the Textures screen on the shared list). <b>Texture scale</b> is
+        how many model units one repeat covers, unless the part has its own UVs.</p>
+      <h3>Scale</h3>
+      <p>Models use a fine grid of their own: <b>Scale</b> is how many world units 32 model units are, so the default 8
+        makes 4 model units one world unit. Coordinates go from −255 to 255.</p>
+      <h3>Emitter</h3>
+      <p>A model can have one particle emitter, using a shared particle type, always on. Drag its orange marker in the
+        views or type its position; yaw and pitch set where it fires.</p>
+      <h3>Limits</h3>
+      <p>Up to 64 models, 32 parts each, 255 vertices and 255 faces per part. The props of one level may draw at most
+        32768 triangles together (a quad is two, a base part counts twice).</p>
+    </section>
+    <section data-topic="modeling" hidden>
+      <h2>Modeling tools</h2>
+      <p>The top, front and side views edit the vertices of the selected part; the 3D view shows the result (drag to orbit,
+        wheel to zoom).</p>
+      <ul>
+        <li><b>Select</b>: click a vertex (vertices stacked under it in that view come too; use another view to pick one),
+          <kbd>Shift</kbd>+click to add or remove, drag empty space to box-select, <kbd>A</kbd> for all, <kbd>Esc</kbd> for none.</li>
+        <li><b>Move</b>: drag a selected vertex; the whole selection follows, snapped to the Snap grid.</li>
+        <li><b>Add a vertex</b>: double-click empty space. It goes at the depth of the part's middle.</li>
+        <li><b>Make face</b> (<kbd>F</kbd>): select 3 or 4 vertices. The order doesn't matter; the face points away from
+          the middle of the part. If it points the wrong way, <b>Flip faces</b>.</li>
+        <li><b>Extrude</b> (<kbd>E</kbd>): select every vertex of one or more faces. They move out along their normal by
+          the snap distance and side faces join them to where they were; the new vertices stay selected, so drag them on.
+          Extrude the end of a cylinder for an arm, the top of a box for a step.</li>
+        <li><b>Merge</b> (<kbd>M</kbd>): joins the selected vertices into one at their middle. Faces that collapse lose
+          those corners. Merge the top of a box into a point for a pyramid, or two vertices at one spot to stitch shapes.</li>
+        <li><b>Delete faces</b> removes faces whose vertices are all selected (to open a hole), <b>Delete vertices</b>
+          (<kbd>Del</kbd>) removes vertices and the faces using them.</li>
+      </ul>
+      <p>Faces are seen from one side only: the outside. A face you can't see from outside in 3D points inwards.</p>
+    </section>
+    <section data-topic="uv" hidden>
+      <h2>UV editing</h2>
+      <p>UVs say which part of the texture each face shows. Until you edit them, a part's faces are projected along their
+        main axis with the part's texture scale, which works well for boxy shapes.</p>
+      <p>Switch the bottom-right view to <b>UV</b>. It shows the part's faces over its texture, where 64 units are one
+        repeat of the texture (one texel of a 64 px texture is one unit). With vertices selected it shows only the faces
+        they cover, so select a face or a side to work on it alone.</p>
+      <p>Click, box-select and drag UV points like vertices. Points of one vertex at one spot move together; faces that
+        share a vertex but had different UVs there stay apart. The first UV edit gives the part its own UVs (from then on
+        texture scale no longer applies), and new faces get projected ones. <b>Reset UVs</b> projects the shown faces again
+        (with nothing selected, all of them, and the part goes back to projection).</p>
+      <p>Mirrored copies of base parts use the same UVs, so their texture is mirrored too.</p>
+    </section>
+    <section data-topic="keys" hidden>
+      <h2>Keyboard shortcuts</h2>
+      <table>
+        <tr><th colspan="2">Everywhere</th></tr>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>Undo</td></tr>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>, <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>Redo</td></tr>
+        <tr><th colspan="2">Level screen</th></tr>
+        <tr><td><kbd>V</kbd> <kbd>B</kbd> <kbd>E</kbd> <kbd>P</kbd> <kbd>L</kbd> <kbd>M</kbd> <kbd>F</kbd> <kbd>O</kbd></td><td>Select, Box, Vertex, Start, Light, Message, Emitter, Prop</td></tr>
+        <tr><td><kbd>Tab</kbd></td><td>Face mode (selected box)</td></tr>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>D</kbd></td><td>Duplicate box</td></tr>
+        <tr><td><kbd>Del</kbd></td><td>Delete selection</td></tr>
+        <tr><td><kbd>Esc</kbd></td><td>Select nothing</td></tr>
+        <tr><td>Right mouse + <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> <kbd>Q</kbd> <kbd>E</kbd></td><td>Fly in the 3D view</td></tr>
+        <tr><th colspan="2">Models screen</th></tr>
+        <tr><td><kbd>F</kbd></td><td>Make face</td></tr>
+        <tr><td><kbd>E</kbd></td><td>Extrude</td></tr>
+        <tr><td><kbd>M</kbd></td><td>Merge</td></tr>
+        <tr><td><kbd>Del</kbd></td><td>Delete vertices</td></tr>
+        <tr><td><kbd>A</kbd> / <kbd>Esc</kbd></td><td>Select all / none</td></tr>
+      </table>
+    </section>
+  </div>
+</div>
+
+<div id="options" hidden>
+  <div>
+    <fieldset>
+      <legend>Level</legend>
+      <label>Name <input id="name" maxlength="64"></label>
+      <label>Ambient <input id="ambient" type="color"></label>
+      <label>Sky / fog <input id="fog" type="color"></label>
+      <label>Fog distance (0 = off) <input id="fogDist" type="number" min="0" max="65535"></label>
+      <label>Start angle (0–255) <input id="startAngle" type="number" min="0" max="255"></label>
+    </fieldset>
+    <fieldset>
+      <legend>Settings</legend>
+      <label>Warn when link is over <input id="warnKB" type="number" min="1"> KB</label>
+    </fieldset>
+    <button id="closeOptions">Close</button>
+  </div>
+</div>
+<script type="module" src="src/editor/editor.js"></script>
+</body>
+</html>

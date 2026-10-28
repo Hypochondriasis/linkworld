@@ -1,0 +1,9 @@
+# Markdown (README.md stays)
+*.md
+!README.md
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+node_modules/

@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Linkworld</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #ddd; font: 14px sans-serif; }
+  #menu, #error, #loading { padding: 16px; max-width: 600px; }
+  #menu input { width: 100%; box-sizing: border-box; margin: 8px 0; }
+  canvas { position: fixed; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; touch-action: none; }
+  #hud { position: fixed; top: 4px; left: 6px; text-shadow: 0 0 2px #000; pointer-events: none; }
+  #overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.5); cursor: pointer; }
+  #message { position: fixed; top: 25%; left: 16px; right: 16px; text-align: center; font-size: 20px; text-shadow: 0 0 3px #000, 0 0 3px #000; pointer-events: none; white-space: pre-wrap; }
+  #crosshair { position: fixed; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; background: #fff; pointer-events: none; }
+  #prompt { position: fixed; top: 50%; left: 16px; right: 16px; margin-top: 16px; text-align: center; font-size: 16px; text-shadow: 0 0 3px #000, 0 0 3px #000; pointer-events: none; white-space: pre-wrap; }
+  #jump, #fire, #use { position: fixed; right: 24px; bottom: 24px; width: 72px; height: 72px; border-radius: 50%; opacity: .6; font-size: 16px; }
+  #fire { bottom: 108px; }
+  #use { right: 108px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div id="menu" hidden>
+  <h1>Linkworld</h1>
+  <p><button id="editor">Level editor</button> <button id="demo">Play demo level</button></p>
+  <p>Paste link:<br><input id="link" placeholder="https://…#…"><button id="go">Play</button> <button id="edit">Edit</button></p>
+</div>
+<div id="loading" hidden>Loading…</div>
+<div id="error" hidden><h1>Can't load this level</h1><p id="error-text"></p><p><a href="./">Back to menu</a></p></div>
+<div id="game" hidden>
+  <canvas id="canvas"></canvas>
+  <div id="crosshair"></div>
+  <div id="hud"></div>
+  <div id="message" hidden></div>
+  <div id="prompt" hidden></div>
+  <div id="overlay"><p>Click to play · WASD + mouse · Space to jump · E to use · click to shoot · Esc to release<br><br><a id="remix" href="editor.html" style="color:#9cf">Edit this level</a></p></div>
+  <button id="jump" hidden>Jump</button>
+  <button id="fire" hidden>Fire</button>
+  <button id="use" hidden>Use</button>
+</div>
+<script type="module">
+import { encodeLink, decodeLink, parseFragment, fragmentOf, ENT } from './src/format.js';
+import { propScene } from './src/model.js';
+import { createRenderer } from './src/render.js';
+import { startGame } from './src/play.js';
+import { generateTexturesAsync } from './src/texgen.js';
+import { demoPack } from './src/demo.js';
+
+const $ = (id) => document.getElementById(id);
+// Exits and the back button change only the fragment; reload so every level starts clean.
+addEventListener('hashchange', () => location.reload());
+
+// '#<payload>' plays the pack's first level, '#<payload>~<n>' its level n (0-based).
+async function play(fragment) {
+  let pack, level, payload;
+  try {
+    const at = parseFragment(fragment);
+    payload = at.payload;
+    pack = await decodeLink(fragment);
+    level = pack.levels[at.level];
+    if (!level) throw new Error(`this link has no level ${at.level + 1}`);
+  } catch (e) {
+    $('error-text').textContent = e.message;
+    $('error').hidden = false;
+    return;
+  }
+  // Textures and lighting are generated before the first frame; show something meanwhile.
+  $('loading').hidden = false;
+  await new Promise((r) => requestAnimationFrame(() => setTimeout(r)));
+  const images = await generateTexturesAsync(level.textures);
+  // The pack's shared textures are only needed when this level shows its models.
+  const shared = level.entities.some((e) => e.type === ENT.PROP) ? await generateTexturesAsync(pack.textures || []) : [];
+  const scene = propScene(pack, level, images, shared);
+  $('loading').hidden = true;
+  $('game').hidden = false;
+  $('remix').href = 'editor.html' + location.hash;
+  $('remix').onclick = (e) => e.stopPropagation();
+  document.title = (level.name || 'Untitled') + ' – Linkworld';
+  const canvas = $('canvas');
+  const renderer = createRenderer(canvas);
+  startGame(canvas, level, payload, renderer, scene, $('hud'), $('message'));
+  const overlay = $('overlay');
+  overlay.onclick = () => canvas.requestPointerLock && canvas.requestPointerLock();
+  document.addEventListener('pointerlockchange', () => { overlay.hidden = document.pointerLockElement === canvas; });
+  canvas.addEventListener('touchstart', () => { overlay.hidden = true; });
+  overlay.addEventListener('touchstart', () => { overlay.hidden = true; });
+}
+
+if (location.hash.length > 1) {
+  play(location.hash);
+} else {
+  $('menu').hidden = false;
+  $('editor').onclick = () => { location.href = 'editor.html'; };
+  $('demo').onclick = async () => { location.hash = await encodeLink(demoPack()); };
+  const pasted = () => fragmentOf($('link').value);
+  $('go').onclick = () => { location.hash = pasted(); };
+  $('edit').onclick = () => { location.href = 'editor.html#' + pasted(); };
+}
+</script>
+</body>
+</html>
