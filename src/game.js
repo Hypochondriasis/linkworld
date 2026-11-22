@@ -4,6 +4,7 @@
 import { ENT, ON } from './format.js';
 import { corners, hullOf, dot, cross, forward } from './shape.js';
 import { createParticles, emittersOf } from './particles.js';
+import { createWeapons } from './weapons.js';
 
 export const PHYS = {
   gravity: 200,
@@ -173,7 +174,7 @@ function categorize(brushes, p) {
   p.ground = p.onGround ? tr.brush : null;
 }
 
-// input: { forward, right } in -1..1, jump: bool. brushes: from makeBrush.
+// input: { forward, right } in -1..1, jump: bool (fire: bool, for the world's tick). brushes: from makeBrush.
 export function step(p, brushes, input, dt) {
   categorize(brushes, p);
   const fx = -Math.sin(p.yaw), fz = -Math.cos(p.yaw);
@@ -230,16 +231,18 @@ function solidPlanes(box) {
   if (box.shape) for (const f of hullOf(box).faces) planes.push({ n: f.n, d: dot(f.n, f.verts[0]) });
   return planes;
 }
-// How far along the ray o + t·dir it enters the solid (0 when o is inside); Infinity when it misses.
+// How far along the ray o + t·dir it enters the solid, and the normal of the face it enters (t 0 and n null
+// when o is inside); t Infinity when it misses.
+const MISS = { t: Infinity, n: null };
 function rayEnter(planes, o, dir) {
-  let enter = 0, leave = Infinity;
+  let enter = 0, leave = Infinity, entered = null;
   for (const { n, d } of planes) {
     const s = dot(n, o) - d, v = dot(n, dir);
-    if (v === 0) { if (s > 0) return Infinity; }
-    else if (v < 0) enter = Math.max(enter, -s / v);
+    if (v === 0) { if (s > 0) return MISS; }
+    else if (v < 0) { if (-s / v >= enter) { enter = -s / v; entered = n; } }
     else leave = Math.min(leave, -s / v);
   }
-  return enter <= leave ? enter : Infinity;
+  return enter <= leave ? { t: enter, n: entered } : MISS;
 }
 
 const overlaps = (a, b) => [0, 1, 2].every((k) => a.max[k] > b.min[k] && a.min[k] < b.max[k]);
@@ -286,11 +289,17 @@ function placement(d, t) {
   return { move: (p) => rotate(p, h, k, ang), matrix: m };
 }
 
+// A world point (or direction, dir true) in the door's resting frame, and back.
+const angleOf = (d) => (d.e.turn * d.t * Math.PI) / 180;
+const toRest = (d, p, dir) => (d.rest ? rotate(p, dir ? [0, 0, 0] : d.hinge, d.e.axis, -angleOf(d)) : dir ? p : p.map((v, k) => v - d.at.off[k]));
+const fromRest = (d, p, dir) => (d.rest ? rotate(p, dir ? [0, 0, 0] : d.hinge, d.e.axis, angleOf(d)) : dir ? p : p.map((v, k) => v + d.at.off[k]));
+
 // Level state and rules, without DOM. hooks: message(text), exit(exit entity).
 // A trigger activates its targets each time the player enters, uses (E) or shoots it, or only the first time
 // (once). Anything no trigger targets runs on its
 // own: doors open while the player is near, messages show and emitters start at level start.
-// scene: the props' particle types and always-on emitters (model.js propScene), appended to the level's.
+// scene: the props' particle types and always-on emitters (model.js propScene), appended to the level's;
+// scene.fx: index of the first weapon effect type (weapons.js FX) among them, if they are there.
 export function createWorld(level, hooks = {}, scene = { particles: [], emitters: [] }) {
   const ents = level.entities;
   const isDoor = (e) => e.type === ENT.DOOR || e.type === ENT.ROTATOR;
@@ -347,8 +356,7 @@ export function createWorld(level, hooks = {}, scene = { particles: [], emitters
     if (d.box.solid && (player.ground === d.brush || insideBrush(d.brush, player.pos))) {
       // Where the point under the player's feet goes with the door (undo the old placement, apply the new).
       const from = player.pos;
-      const local = d.rest ? rotate(from, d.hinge, d.e.axis, (-d.e.turn * d.t * Math.PI) / 180) : from.map((v, k) => v - d.at.off[k]);
-      player.pos = trace(solids.filter((b) => b !== d.brush), from, next.move(local)).end;
+      player.pos = trace(solids.filter((b) => b !== d.brush), from, next.move(toRest(d, from))).end;
       if (insideBrush(d.brush, player.pos)) {
         player.pos = from;
         Object.assign(d.brush, prevBrush);
@@ -360,27 +368,32 @@ export function createWorld(level, hooks = {}, scene = { particles: [], emitters
     return true;
   }
 
-  // The nearest box the view ray hits within range, or null. Doors are tested in their resting frame.
-  function look(range) {
-    const o = [player.pos[0], player.pos[1] + PHYS.eyeHeight, player.pos[2]], dir = forward(player.yaw, player.pitch);
+  // The nearest box the ray o + t·dir (dir unit length) hits within range: { r, t, p (where), n (unit face
+  // normal; null when o is inside it) }, or null. Doors are tested in their resting frame.
+  const boxDist = (box, p) => Math.hypot(...[0, 1, 2].map((k) => Math.max(box.min[k] - p[k], 0, p[k] - box.max[k])));
+  function cast(o, dir, range) {
     let best = null;
     for (const r of rayBoxes) {
-      let ro = o, rd = dir;
       const d = r.door;
-      if (d && d.rest) {
-        const a = (-d.e.turn * d.t * Math.PI) / 180;
-        ro = rotate(o, d.hinge, d.e.axis, a);
-        rd = rotate(dir, [0, 0, 0], d.e.axis, a);
-      } else if (d) ro = o.map((v, k) => v - d.at.off[k]);
-      else if (Math.hypot(...[0, 1, 2].map((k) => Math.max(r.box.min[k] - o[k], 0, o[k] - r.box.max[k]))) > range) continue;
-      const t = rayEnter(r.planes, ro, rd);
-      if (t < range) { // strict: a miss is Infinity
-        range = t;
-        best = r;
+      if (!d && boxDist(r.box, o) > range) continue;
+      const h = d ? rayEnter(r.planes, toRest(d, o), toRest(d, dir, true)) : rayEnter(r.planes, o, dir);
+      if (h.t < range) { // strict: a miss is Infinity
+        range = h.t;
+        best = { r, t: h.t, n: h.n };
       }
     }
+    if (!best) return null;
+    if (best.n) {
+      const len = Math.hypot(...best.n);
+      best.n = best.n.map((v) => v / len);
+      if (best.r.door) best.n = fromRest(best.r.door, best.n, true);
+    }
+    best.p = o.map((v, k) => v + dir[k] * best.t);
     return best;
   }
+  const eye = () => [player.pos[0], player.pos[1] + PHYS.eyeHeight, player.pos[2]];
+  const aim = () => forward(player.yaw, player.pitch);
+  const look = (range) => { const h = cast(eye(), aim(), range); return h && h.r; };
   const spent = new Set(); // once-triggers that fired
   const hit = (r, on) => (r ? r.on.filter((e) => e.on === on && !spent.has(e)) : []);
   const fire = (list) => {
@@ -390,9 +403,31 @@ export function createWorld(level, hooks = {}, scene = { particles: [], emitters
       for (const i of e.targets) activate(ents[i]);
     }
   };
+  const shoot = () => {
+    const h = cast(eye(), aim(), Infinity);
+    if (h) fire(hit(h.r, ON.SHOOT));
+    return h;
+  };
+  const weapons = createWeapons({
+    eye,
+    aim,
+    cast,
+    shoot,
+    shot: (h) => fire(hit(h.r, ON.SHOOT)),
+    // shortcut: no line of sight and doors count at rest, so a blast reaches targets through thin walls; trace to the box if it matters.
+    blast: (p, radius) => { for (const r of rayBoxes) if (boxDist(r.box, p) <= radius) fire(hit(r, ON.SHOOT)); },
+    pin(h, p, dir) {
+      const d = h.r.door;
+      if (!d) return () => ({ p, dir });
+      const lp = toRest(d, p), ld = toRest(d, dir, true);
+      return () => ({ p: fromRest(d, lp), dir: fromRest(d, ld, true) });
+    },
+    burst: (fx, p, dir, count) => { if (scene.fx !== undefined) particles.burst(scene.fx + fx, p, dir, count); },
+  });
 
   function tick(input, dt) {
     step(player, solids, input, dt);
+    weapons.update(dt, !!input.fire);
     particles.update(dt);
     if (player.pos[1] < floor) {
       player.pos = [...player.spawn];
@@ -441,6 +476,7 @@ export function createWorld(level, hooks = {}, scene = { particles: [], emitters
     models: () => doors.map((d) => d.at.matrix),
     usable: () => hit(look(USE_RANGE), ON.USE)[0] || null, // what E would use now (its text is the prompt)
     use: () => fire(hit(look(USE_RANGE), ON.USE)),
-    shoot: () => fire(hit(look(Infinity), ON.SHOOT)),
+    shoot, // fires the rifle's ray now, whatever weapon is held
+    weapons,
   };
 }

@@ -1,5 +1,7 @@
 // Plays one level of a pack: input (keyboard, mouse, touch), HUD, messages, exits, and the frame loop.
 import { PHYS, createWorld } from './game.js';
+import { WEAPONS, fxScene } from './weapons.js';
+import { cross, forward } from './shape.js';
 
 const TICK = 1 / 120;
 const GAME_URL = () => new URL('index.html', location.href).href;
@@ -15,6 +17,8 @@ export function exitHref(e, payload, gameUrl = GAME_URL()) {
 // scene: model.js propScene (the textures and the props). payload: this pack's link payload (exits to its other levels reuse it).
 export function startGame(canvas, level, payload, renderer, scene, hud, messageEl) {
   let msgTimer = 0;
+  const fx = fxScene(scene.images); // weapon effects go after the level's and the props' particle types
+  scene = { ...scene, images: fx.images, particles: [...scene.particles, ...fx.particles], fx: (level.particles || []).length + scene.particles.length };
   const world = createWorld(level, {
     message(text) {
       messageEl.textContent = text;
@@ -32,15 +36,25 @@ export function startGame(canvas, level, payload, renderer, scene, hud, messageE
   renderer.load(level, scene.images, { hidden: world.hidden, dynamic: world.dynamic, props: scene.faces });
   const p = world.player;
   const keys = new Set();
-  const touch = { move: null, look: null, jump: false, forward: 0, right: 0 };
+  const touch = { move: null, look: null, jump: false, fire: false, forward: 0, right: 0 };
+  let mouseFire = false;
+  const weapons = world.weapons;
+  const weaponEl = document.getElementById('weapon');
+  const select = (i) => {
+    weapons.select((i + WEAPONS.length) % WEAPONS.length);
+    weaponEl.textContent = `${weapons.current + 1} ${WEAPONS[weapons.current].name}`;
+  };
+  select(0);
 
   addEventListener('keydown', (e) => {
     keys.add(e.code);
     if (e.code === 'KeyE' && !e.repeat) world.use();
+    const n = /^Digit([1-9])$/.exec(e.code);
+    if (n && n[1] <= WEAPONS.length) select(n[1] - 1);
     if (e.code === 'Space') e.preventDefault();
   });
   addEventListener('keyup', (e) => keys.delete(e.code));
-  addEventListener('blur', () => keys.clear());
+  addEventListener('blur', () => { keys.clear(); mouseFire = false; });
 
   const look = (dx, dy, sens) => {
     p.yaw -= dx * sens;
@@ -50,8 +64,13 @@ export function startGame(canvas, level, payload, renderer, scene, hud, messageE
     if (!touch.used && canvas.requestPointerLock) canvas.requestPointerLock();
   });
   canvas.addEventListener('mousedown', (e) => {
-    if (e.button === 0 && document.pointerLockElement === canvas) world.shoot();
+    if (e.button === 0 && document.pointerLockElement === canvas) mouseFire = true;
   });
+  addEventListener('mouseup', (e) => { if (e.button === 0) mouseFire = false; });
+  document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement !== canvas) mouseFire = false; });
+  canvas.addEventListener('wheel', (e) => {
+    if (document.pointerLockElement === canvas && e.deltaY) select(weapons.current + Math.sign(e.deltaY));
+  }, { passive: true });
   document.addEventListener('mousemove', (e) => {
     if (document.pointerLockElement === canvas) look(e.movementX, e.movementY, 0.0025);
   });
@@ -99,9 +118,10 @@ export function startGame(canvas, level, payload, renderer, scene, hud, messageE
     return b;
   };
   const jumpBtn = button('jump', () => { touch.jump = true; }, () => { touch.jump = false; });
-  const fireBtn = button('fire', () => world.shoot());
+  const fireBtn = button('fire', () => { touch.fire = true; }, () => { touch.fire = false; });
+  const gunBtn = button('gun', () => select(weapons.current + 1));
   const useBtn = button('use', () => world.use());
-  jumpBtn.hidden = fireBtn.hidden = !isTouch;
+  jumpBtn.hidden = fireBtn.hidden = gunBtn.hidden = !isTouch;
   const prompt = document.getElementById('prompt');
   let looked; // the usable last shown, so the DOM changes only when it does
 
@@ -111,6 +131,7 @@ export function startGame(canvas, level, payload, renderer, scene, hud, messageE
       forward: Math.max(-1, Math.min(1, k('KeyW') + k('ArrowUp') - k('KeyS') - k('ArrowDown') + touch.forward)),
       right: Math.max(-1, Math.min(1, k('KeyD') + k('ArrowRight') - k('KeyA') - k('ArrowLeft') + touch.right)),
       jump: keys.has('Space') || touch.jump,
+      fire: mouseFire || touch.fire,
     };
   };
 
@@ -132,7 +153,9 @@ export function startGame(canvas, level, payload, renderer, scene, hud, messageE
       prompt.hidden = !(u && u.text);
       useBtn.hidden = !(isTouch && u);
     }
-    renderer.draw({ pos: [p.pos[0], p.pos[1] + PHYS.eyeHeight, p.pos[2]], yaw: p.yaw, pitch: p.pitch }, world.models(), [], world.particles);
+    const cam = { pos: [p.pos[0], p.pos[1] + PHYS.eyeHeight, p.pos[2]], yaw: p.yaw, pitch: p.pitch };
+    const right = [Math.cos(p.yaw), 0, -Math.sin(p.yaw)], fwd = forward(p.yaw, p.pitch);
+    renderer.draw(cam, world.models(), [], world.particles, weapons.mesh(), weapons.viewModel(cam, right, cross(right, fwd), fwd));
     frames++;
     if (now - fpsTime > 500) {
       fps = Math.round((frames * 1000) / (now - fpsTime));

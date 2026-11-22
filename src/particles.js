@@ -42,6 +42,12 @@ export function createParticles(types, emitters, seed = 1) {
     }
   }
 
+  // count particles of type kind at pos, in its cone around the unit vector dir (weapon effects).
+  function burst(kind, pos, dir, count) {
+    const em = { e: { pos, kind }, t: types[kind], dir };
+    if (em.t) for (let i = 0; i < count; i++) spawn(em);
+  }
+
   function update(dt) {
     for (const em of ems) {
       if (!em.on) continue;
@@ -59,7 +65,7 @@ export function createParticles(types, emitters, seed = 1) {
     list.length = n;
   }
 
-  return { list, types, fire, update };
+  return { list, types, fire, burst, update };
 }
 
 export const emittersOf = (level) => level.entities.filter((e) => e.type === ENT.EMITTER);

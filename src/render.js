@@ -98,6 +98,31 @@ void main() {
   gl_FragColor = vec4(c, a);
 }`;
 
+// Flat-colored meshes (projectiles, the weapon in hand): color per vertex, fogged like the scene.
+const COLOR_VS = `
+attribute vec3 aPos;
+attribute vec3 aColor;
+uniform mat4 uViewProj;
+varying vec3 vColor;
+varying vec3 vPos;
+void main() {
+  vColor = aColor;
+  vPos = aPos;
+  gl_Position = uViewProj * vec4(aPos, 1.0);
+}`;
+const COLOR_FS = `
+precision mediump float;
+uniform vec3 uEye;
+uniform vec3 uFogColor;
+uniform float uFogDist;
+varying vec3 vColor;
+varying vec3 vPos;
+void main() {
+  vec3 c = vColor;
+  if (uFogDist > 0.0) c = mix(c, uFogColor, clamp(length(vPos - uEye) / uFogDist, 0.0, 1.0));
+  gl_FragColor = vec4(c, 1.0);
+}`;
+
 // Editor overlays (selection outlines, picked faces): flat color, drawn on top of the scene.
 const OVERLAY_VS = `
 attribute vec3 aPos;
@@ -127,6 +152,12 @@ export function createRenderer(canvas) {
   for (const n of ['aPos', 'aUVA']) ploc[n] = gl.getAttribLocation(partProg, n);
   for (const n of ['uViewProj', 'uTex', 'uUseAlpha', 'uAdd', 'uEye', 'uFogColor', 'uFogDist']) ploc[n] = gl.getUniformLocation(partProg, n);
   const partBuf = gl.createBuffer();
+
+  const colorProg = program(gl, COLOR_VS, COLOR_FS);
+  const cloc = {};
+  for (const n of ['aPos', 'aColor']) cloc[n] = gl.getAttribLocation(colorProg, n);
+  for (const n of ['uViewProj', 'uEye', 'uFogColor', 'uFogDist']) cloc[n] = gl.getUniformLocation(colorProg, n);
+  const colorBuf = gl.createBuffer();
 
   gl.enable(gl.DEPTH_TEST);
   gl.enable(gl.CULL_FACE);
@@ -171,8 +202,9 @@ export function createRenderer(canvas) {
 
   // cam: { pos: [x,y,z] eye position, yaw, pitch } in units / radians. models[k]: mat4 of opts.dynamic[k].
   // overlay: [{ lines: bool, verts: [x,y,z,...], color: [r,g,b,a] }] drawn last, through walls.
-  // parts: a particle system from particles.js (or null).
-  function draw(cam, models = [], overlay = [], parts = null) {
+  // parts: a particle system from particles.js (or null). items, held: flat-colored triangles
+  // ([x,y,z, r,g,b] per vertex, weapons.js): items in the scene, held over it (the weapon in hand).
+  function draw(cam, models = [], overlay = [], parts = null, items = [], held = []) {
     const dpr = Math.min(window.devicePixelRatio || 1, 1.5); // shortcut: fixed DPR cap for low-end fill rate; make it a setting if it looks soft
     const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
     if (canvas.width !== w || canvas.height !== h) {
@@ -216,7 +248,12 @@ export function createRenderer(canvas) {
     gl.depthMask(true);
     for (const n of ATTRS) if (n !== 'aPos') gl.disableVertexAttribArray(loc[n]);
 
+    if (items.length) drawColored(cam, vp, fog, items);
     if (parts && parts.list.length) drawParticles(cam, vp, fog, parts);
+    if (held.length) {
+      gl.clear(gl.DEPTH_BUFFER_BIT); // never sinks into walls
+      drawColored(cam, vp, fog, held);
+    }
     if (!overlay.length) return;
     gl.disable(gl.DEPTH_TEST);
     gl.disable(gl.CULL_FACE);
@@ -234,6 +271,25 @@ export function createRenderer(canvas) {
     gl.disable(gl.BLEND);
     gl.enable(gl.CULL_FACE);
     gl.enable(gl.DEPTH_TEST);
+  }
+
+  // shortcut: unlit (fixed shading in weapons.js), so items glow in dark rooms; sample the lightmap probe if it shows.
+  function drawColored(cam, vp, fog, verts) {
+    gl.useProgram(colorProg);
+    gl.uniformMatrix4fv(cloc.uViewProj, false, vp);
+    gl.uniform3fv(cloc.uEye, cam.pos);
+    gl.uniform3fv(cloc.uFogColor, fog);
+    gl.uniform1f(cloc.uFogDist, level.fogDist);
+    gl.disable(gl.CULL_FACE);
+    gl.bindBuffer(gl.ARRAY_BUFFER, colorBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verts), gl.STREAM_DRAW);
+    gl.enableVertexAttribArray(cloc.aPos);
+    gl.enableVertexAttribArray(cloc.aColor);
+    gl.vertexAttribPointer(cloc.aPos, 3, gl.FLOAT, false, 24, 0);
+    gl.vertexAttribPointer(cloc.aColor, 3, gl.FLOAT, false, 24, 12);
+    gl.drawArrays(gl.TRIANGLES, 0, verts.length / 6);
+    gl.disableVertexAttribArray(cloc.aColor);
+    gl.enable(gl.CULL_FACE);
   }
 
   // One draw per particle type, back to front within it; normal-blend types before additive ones.
